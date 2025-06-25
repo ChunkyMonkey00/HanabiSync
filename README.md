@@ -1,43 +1,151 @@
 # HanabiSync 🎆🔊
 
 **Turn your music into fireworks.**  
-HanabiSync is an open source audio analysis tool that generates synchronized firework cue maps from any song or audio track.
+HanabiSync is an open-source project featuring a Python-based audio analysis tool that generates synchronized firework cue maps from any song or audio track, and a web-based visualizer to bring those cues to life.
 
-Perfect for backyard firework shows, synced holiday displays, or just nerding out with music-reactive explosions.
+Perfect for backyard firework shows, synced holiday displays, creating music videos, or just nerding out with music-reactive explosions.
 
 ---
 
 ## 🚀 What It Does
 
-HanabiSync analyzes an audio file using FFT, beat tracking, and amplitude detection to create a timestamped cue map for firework effects.
+HanabiSync has two main components:
 
-It outputs a simple JSON file like:
-```json
-[
-  { "timestamp": 2.5, "firework": "burst" },
-  { "timestamp": 4.1, "firework": "sparkle" }
-]
-````
+1.  **Python Audio Analyzer (`src/hanabi.py`):**
+    *   Analyzes an audio file using advanced techniques like beat tracking, onset detection, RMS energy, spectral centroid, and spectral flux analysis via the Librosa library.
+    *   Generates a timestamped cue map identifying moments for specific firework effects.
+    *   Outputs a JSON file like:
+      ```json
+      [
+        { "timestamp": 2.53, "firework": "mid_burst" },
+        { "timestamp": 4.11, "firework": "high_sparkle" },
+        { "timestamp": 5.05, "firework": "kick_boom" },
+        { "timestamp": 6.78, "firework": "bass_pulse" }
+      ]
+      ```
+    *   This cue file can be used with the included web visualizer or fed into a microcontroller, Raspberry Pi, or custom control system.
 
-This cue file can be fed into a microcontroller, Raspberry Pi, or custom control system to launch fireworks in sync with music.
+2.  **Web Visualizer (`hanabiVisualizer/`):**
+    *   Plays your audio file and the generated JSON cue file in sync.
+    *   Renders dynamic firework animations on an HTML5 Canvas, corresponding to the cue types.
+    *   Includes playback controls (play, pause, stop, seek) and a log of triggered events.
 
 ---
 
-## 🎧 How It Works
+## 🎶 Audio Analysis Engine (Python Core)
 
-* **FFT & Frequency Bands** – Detect dominant frequencies to classify effects (e.g., bass = boom).
-* **RMS & Onset Detection** – Find moments of intensity and musical change.
-* **Beat Tracking** – Identify tempo and rhythmic hits.
-* **Cue Logic** – Map sound events to firework types based on timing and frequency patterns.
+The `src/hanabi.py` script dives deep into your audio to find the perfect moments for fireworks:
+
+*   **Audio Loading & Preprocessing:** Uses [Librosa](https://librosa.org/) to load various audio formats.
+*   **Parallel Feature Extraction:** Efficiently analyzes audio by running multiple extraction processes concurrently:
+    *   **Beat Tracking:** Identifies the song's tempo and the timing of individual beats (`librosa.beat.beat_track`).
+    *   **Onset Detection:** Pinpoints sudden increases in energy or changes in sound, often corresponding to new notes or percussive hits (`librosa.onset.onset_detect`).
+    *   **RMS Energy Analysis:** Calculates Root Mean Square energy over short windows to gauge the loudness and intensity of audio segments.
+    *   **Spectral Centroid:** Determines the "center of mass" of the sound spectrum. Higher values indicate brighter, higher-frequency sounds; lower values indicate darker, bassier sounds.
+    *   **Spectral Flux (Onset Strength):** Measures the change in the spectrum between frames, effective for detecting sharp, percussive transients.
+*   **Sophisticated Cue Logic:**
+    *   Employs a set of dynamic thresholds and rules based on the extracted features to map specific sonic events to firework types. For example:
+        *   A strong beat with high spectral centroid might trigger a `high_sparkle`.
+        *   An intense onset with low spectral centroid could become a `bass_pulse`.
+        *   A sharp transient with high spectral flux might be a `comet_tail`.
+    *   Includes cooldown mechanisms (`MIN_TIME_BETWEEN_SAME_TYPE_CUES`, `MIN_TIME_BETWEEN_ANY_PARTICLE_CUES`) to prevent cues from firing too rapidly and ensure a more visually pleasing and realistic show.
+*   **Defined Firework Types:** The script maps detected audio events to one of the following firework types:
+    *   `mid_burst`: General energy, often on beats with moderate frequency content.
+    *   `high_sparkle`: Bright, high-frequency events, typically on energetic beats.
+    *   `kick_boom`: Strong, impactful onsets, like kick drums.
+    *   `bass_pulse`: Deep, resonant bass hits identified by onsets with low spectral content.
+    *   `comet_tail`: Sharp, quick accents with significant spectral change.
+
+---
+
+## ✨ Web Visualizer (`hanabiVisualizer/`)
+
+Bring your generated cues to life! The web visualizer (open `hanabiVisualizer/index.html` in a browser) offers:
+
+*   **Easy File Loading:** Pick your original audio file and the `_cues.json` file generated by the Python script.
+*   **Synchronized Playback:** Audio playback is tightly synced with firework animations.
+*   **Dynamic Firework Animations:**
+    *   Unique particle effects, colors, and behaviors for each firework type (`mid_burst`, `high_sparkle`, `kick_boom`, `comet_tail`).
+    *   A special background pulsing effect for `bass_pulse` cues.
+    *   Fireworks are rendered on an HTML5 Canvas.
+*   **Playback Controls:** Play, pause, stop, and a seekable progress bar to jump to any part of the song.
+*   **Real-time Log:** See which cues are being triggered and when.
+
+---
+
+## 🔧 Getting Started / How to Use
+
+### 1. Generate Cues (Python)
+
+*   **Prerequisites:**
+    *   Python 3.x
+    *   Pip (Python package installer)
+    *   `ffmpeg` (often required by Librosa for MP3 and other compressed audio formats – ensure it's installed and in your system's PATH).
+*   **Setup:**
+    1.  Clone this repository: `git clone https://github.com/your-username/HanabiSync.git`
+    2.  Navigate to the project directory: `cd HanabiSync`
+    3.  Install Python dependencies: `pip install librosa numpy`
+*   **Run the Analyzer:**
+    *   To analyze a specific audio file:
+        ```bash
+        python src/hanabi.py -f path/to/your/audio.mp3
+        ```
+    *   Or, place your audio file in an `audio/` directory in the project root (create it if it doesn't exist) and run:
+        ```bash
+        python src/hanabi.py
+        ```
+        The script will attempt to find the first compatible audio file in `../audio/` (relative to `src/hanabi.py`).
+*   **Output:**
+    *   A `_cues.json` file (e.g., `my_song_cues.json`) will be saved in an `output/` directory in the project root.
+    *   Detailed processing logs will be printed to the console.
+
+### 2. Visualize Your Show (Web)
+
+1.  Open the `hanabiVisualizer/index.html` file in a modern web browser (e.g., Chrome, Firefox, Edge).
+2.  Using the file input controls on the page:
+    *   Load your original audio file.
+    *   Load the `_cues.json` file generated in the previous step.
+3.  Once both files are loaded, the "Play" button will become active.
+4.  Click "Play" and enjoy your music-synchronized firework display!
+
+---
+
+## 🎆 Firework Types & Visuals
+
+The Python script identifies distinct audio events and maps them to the following firework types, which the web visualizer then renders:
+
+*   **`mid_burst`**:
+    *   **Audio Trigger:** Typically associated with general energy on musical beats with mid-range frequency content.
+    *   **Visuals:** Bursts of red/orange particles with a moderate lifespan.
+*   **`high_sparkle`**:
+    *   **Audio Trigger:** Caused by energetic beats characterized by bright, high-frequency sounds.
+    *   **Visuals:** Cascading gold/yellow sparkling particles with a longer duration.
+*   **`kick_boom`**:
+    *   **Audio Trigger:** Fired by strong, percussive onsets like kick drums or impactful rhythmic hits.
+    *   **Visuals:** Intense purple/violet particle explosions, short but impactful.
+*   **`bass_pulse`**:
+    *   **Audio Trigger:** Triggered by deep bass frequencies detected during onsets.
+    *   **Visuals:** A rhythmic pulse of deep color in the background of the visualizer (e.g., deep purples, blues).
+*   **`comet_tail`**:
+    *   **Audio Trigger:** Generated by sharp, quick accents in the music that show a rapid change in spectral content (high spectral flux).
+    *   **Visuals:** Streaking light blue/white particles with visible trails, simulating a comet.
+
+*Note: The visualizer's legend in `index.html` provides a quick reference for these types as well.*
 
 ---
 
 ## 💡 Ideas & Roadmap
 
-* [ ] Add GUI timeline visualizer
-* [ ] Export cue maps in multiple formats (CSV, MIDI?)
-* [ ] Web version using JavaScript + WebAudio API
-* [ ] Real-time audio reaction mode
-* [ ] Integration with DMX or relay hardware
+*   [✔️] Web version using JavaScript + WebAudio API (Initial version complete!)
+*   [✔️] Basic GUI/Visualizer (Web visualizer serves this purpose for playback!)
+*   [ ] Advanced Timeline Editor/GUI: A more sophisticated interface for manually adjusting, adding, or removing cues.
+*   [ ] Export cue maps in multiple formats (CSV, MIDI, FSEQ for xLights/Vixen?).
+*   [ ] Real-time audio reaction mode for the Python script (bypassing pre-analysis).
+*   [ ] Integration with DMX or relay hardware for controlling physical fireworks or lights.
+*   [ ] Advanced parameter tuning for Python script (e.g., via config file or more CLI args).
+*   [ ] More customization options for web visualizer (colors, particle effects, background).
+*   [ ] Improved accuracy and variety in cue detection logic (e.g., exploring `librosa.segment.recurrence_matrix` for song structure).
 
 ---
+
+Contributions and ideas are welcome! Let's make some noise (and light)!
