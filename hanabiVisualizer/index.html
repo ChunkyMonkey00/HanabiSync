@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HanabiSync Web Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>HanabiSync - Firework Visualizer</h1>
+        </header>
+
+        <section id="file-controls">
+            <h2>Load Files</h2>
+            <div>
+                <label for="audioFile">Audio File (.mp3, .wav, etc.):</label>
+                <input type="file" id="audioFile" accept="audio/*">
+            </div>
+            <div>
+                <label for="cueFile">Cue File (.json):</label>
+                <input type="file" id="cueFile" accept=".json,application/json">
+            </div>
+            <p id="file-status">Please load an audio file and a cue file.</p>
+        </section>
+
+        <section id="playback-controls">
+            <h2>Playback</h2>
+            <button id="playPauseButton" disabled>Play</button>
+            <button id="stopButton" disabled>Stop</button>
+            <div class="progress-container">
+                <input type="range" id="progressBar" value="0" min="0" max="100" step="0.1" disabled>
+                <span id="timeDisplay">00:00 / 00:00</span>
+            </div>
+        </section>
+
+        <section id="visualizer">
+            <h2>Firework Display</h2>
+            <canvas id="fireworkCanvas"></canvas>
+        </section>
+
+        <section id="info-legend">
+            <h2>Information & Legend</h2>
+            <div id="infoBox">
+                <p><strong>Firework Types (from default `hanabi.py`):</strong></p>
+                <ul>
+                    <li><strong>Sparkle (High frequency):</strong> Gold/Yellow particles, longer duration</li>
+                    <li><strong>Burst (Low-Mid frequency):</strong> Red/Orange particles, medium duration</li>
+                    <li><strong>Boom (Onsets):</strong> Purple/Violet particles, short but intense</li>
+                </ul>
+                <p><strong>Instructions:</strong></p>
+                <ol>
+                    <li>Run the Python `hanabi.py` script (from the original project) to generate a `_cues.json` file from your audio. For example: `python path/to/hanabi.py -f path/to/your_audio.mp3`. This will create a `your_audio_cues.json` in an `output` directory relative to `hanabi.py`.</li>
+                    <li>Load the audio file and the generated `_cues.json` file using the controls above.</li>
+                    <li>Click Play to start the synchronized firework display.</li>
+                </ol>
+                <div id="logMessages">
+                    <p>Log:</p>
+                    <pre id="logOutput"></pre>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

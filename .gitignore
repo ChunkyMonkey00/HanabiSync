@@ -1,3 +1,15 @@
+# Ignore everything inside audio/ and output/
+audio/*
+output/*
+
+# But not the folders themselves
+!audio/
+!output/
+
+# Allow empty folder tracking using .gitkeep or similar
+!audio/.gitkeep
+!output/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.pyc
