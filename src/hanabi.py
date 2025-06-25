@@ -7,16 +7,9 @@ import concurrent.futures
 import argparse
 import glob
 
-RMS_THRESHOLD_FACTOR_BEAT = 0.55
-SPECTRAL_CENTROID_THRESHOLD_FACTOR = 0.8
-ONSET_RMS_MULTIPLIER = 0.65
-BASS_CENTROID_LOW_FACTOR = 0.75
-
-SPECTRAL_FLUX_THRESHOLD_FACTOR = 1.75
-ONSET_RMS_SHARP_ACCENT_MULTIPLIER = 0.75
-
 MIN_TIME_BETWEEN_SAME_TYPE_CUES = 0.15
 MIN_TIME_BETWEEN_ANY_PARTICLE_CUES = 0.08
+QUIET_DURATION_FOR_BOOST = 5.0
 
 FIREWORK_TYPES = {
     "mid_energy": "mid_burst",
@@ -66,7 +59,6 @@ def _extract_beats(y, sr):
     log_message("Starting beat tracking...")
     tempo_from_librosa, beat_frames = librosa.beat.beat_track(y=y, sr=sr, trim=False)
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-
     tempo_for_logging_str = "N/A"
     if isinstance(tempo_from_librosa, np.ndarray):
         if tempo_from_librosa.size == 1:
@@ -92,7 +84,6 @@ def _extract_beats(y, sr):
             log_message(f"Warning: Could not convert tempo value {tempo_from_librosa} to float for formatted logging.")
     else:
         log_message("Warning: Beat tracking returned None for tempo.")
-    
     log_message(f"Beat tracking complete. Tempo: {tempo_for_logging_str} BPM, Beats: {len(beat_times)}")
     return tempo_from_librosa, beat_times
 
@@ -156,6 +147,121 @@ def analyze_audio(audio_path):
             return None
     return y, sr, results
 
+def calculate_feature_profile(feature_array, feature_name="Feature", filter_zeros=True):
+    profile = {}
+    percentiles_to_define = sorted(list(set([
+        10, 25, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95
+    ])))
+
+
+    def get_default_profile():
+        default_val = 0.0
+        default_p = {
+            'min': default_val, 'max': default_val, 'mean': default_val, 'std': default_val,
+            'count': 0
+        }
+        for p_key_val in percentiles_to_define:
+            default_p[f'p{p_key_val}'] = default_val
+        default_p['median'] = default_p.get('p50', default_val)
+        return default_p
+
+    if not (hasattr(feature_array, 'size') and feature_array.size > 0):
+        log_message(f"Warning: Empty or invalid array for {feature_name} profile. Returning default profile.")
+        return get_default_profile()
+
+    if filter_zeros:
+        values = feature_array.astype(float)[feature_array > 1e-6] 
+    else:
+        values = feature_array
+
+    if values.size == 0:
+        log_message(f"Warning: No valid values (after filtering) in {feature_name} for profile. Checking original or returning default.")
+        if filter_zeros and feature_array.size > 0: 
+            values = feature_array
+            log_message(f"Using original (unfiltered) array for {feature_name} profile as filtered was empty.")
+        if values.size == 0:
+            log_message(f"Warning: Array for {feature_name} is effectively empty. Returning default profile.")
+            return get_default_profile()
+
+    profile['min'] = np.min(values)
+    profile['max'] = np.max(values)
+    profile['mean'] = np.mean(values)
+    profile['std'] = np.std(values)
+    profile['count'] = values.size
+    
+    calculated_percentiles_values = np.percentile(values, percentiles_to_define)
+    
+    for p_key_val, p_numeric_val in zip(percentiles_to_define, calculated_percentiles_values):
+        profile[f'p{p_key_val}'] = p_numeric_val
+    
+    profile['median'] = profile.get('p50', np.median(values))
+
+    log_message(
+        f"{feature_name} Profile (elements: {profile['count']}): "
+        f"Min={profile['min']:.2f}, Max={profile['max']:.2f}, Mean={profile['mean']:.2f}, "
+        f"Median={profile['median']:.2f} (P50), Std={profile['std']:.2f}, "
+        f"P25={profile.get('p25', 'N/A'):.2f}, P75={profile.get('p75', 'N/A'):.2f}, P90={profile.get('p90', 'N/A'):.2f}"
+    )
+    return profile
+
+class DynamicThresholds:
+    def __init__(self, rms_profile, sc_profile, flux_profile, sensitivity_boost=False):
+        self.rms_profile = rms_profile
+        self.sc_profile = sc_profile
+        self.flux_profile = flux_profile
+        self.boost = sensitivity_boost
+
+        key_bass_sc = 'p45'
+        key_onset_rms_general = 'p55'
+
+        key_rms_beat = 'p65'
+        key_sc_beat_split = 'p70'
+
+        key_flux_sharp = 'p85'
+        key_rms_sharp = 'p80'
+
+        if self.boost:
+            key_bass_sc = 'p45' 
+            key_onset_rms_general = 'p40' 
+            key_rms_beat = 'p50'
+            key_sc_beat_split = 'p60' 
+            key_flux_sharp = 'p75'
+            key_rms_sharp = 'p70'
+        
+        def get_profile_value(profile, key, feature_type_for_fallback="generic"):
+            default_key = 'p50'
+            if feature_type_for_fallback == "sc_bass" and 'p25' in profile :
+                 default_key = 'p25' if 'p25' in profile else 'p10' if 'p10' in profile else 'p50'
+            
+            if key not in profile:
+                log_message(f"Warning: Percentile key '{key}' not found in {feature_type_for_fallback} profile. Falling back to '{default_key}'. Ensure calculate_feature_profile computes all necessary percentiles.")
+                chosen_key = default_key
+                if chosen_key not in profile:
+                    log_message(f"Critical Warning: Fallback key '{chosen_key}' also not found. Using raw median if possible.")
+                    return profile.get('median', 0)
+            else:
+                chosen_key = key
+            return profile[chosen_key]
+
+        self.rms_trigger_threshold_beat = get_profile_value(self.rms_profile, key_rms_beat, "RMS")
+        self.sc_beat_split_thresh = get_profile_value(self.sc_profile, key_sc_beat_split, "SC")
+
+        self.bass_sc_thresh = get_profile_value(self.sc_profile, key_bass_sc, "sc_bass")
+        self.onset_rms_trigger_threshold = get_profile_value(self.rms_profile, key_onset_rms_general, "RMS")
+
+        self.flux_trigger_threshold = get_profile_value(self.flux_profile, key_flux_sharp, "Flux")
+        self.sharp_onset_rms_thresh = get_profile_value(self.rms_profile, key_rms_sharp, "RMS")
+        
+        log_message(f"--- Dynamically Determined Thresholds (Boost: {self.boost}) ---")
+        log_message(f"  RMS Beat Trigger ({key_rms_beat}): {self.rms_trigger_threshold_beat:.4f}")
+        log_message(f"  SC Beat Split ({key_sc_beat_split} for high_freq): {self.sc_beat_split_thresh:.2f}")
+        log_message(f"  Onset RMS General ({key_onset_rms_general} for kick/bass): {self.onset_rms_trigger_threshold:.4f}")
+        log_message(f"  Bass SC ({key_bass_sc}): {self.bass_sc_thresh:.2f}")
+        log_message(f"  Sharp Accent Flux ({key_flux_sharp}): {self.flux_trigger_threshold:.4f}")
+        log_message(f"  Sharp Accent RMS ({key_rms_sharp}): {self.sharp_onset_rms_thresh:.4f}")
+        log_message("----------------------------------------------------")
+
+
 def generate_cues(sr, features, hop_length):
     potential_cues = []
     
@@ -164,80 +270,97 @@ def generate_cues(sr, features, hop_length):
     flux_frames = features['spectral_flux_frames']
 
     if not all(hasattr(arr, 'size') and arr.size > 0 for arr in [rms_frames, sc_frames, flux_frames]):
-        log_message("Warning: One or more feature arrays are empty or invalid. Cannot generate cues effectively.")
+        log_message("Warning: One or more feature arrays are empty. Cannot generate cues effectively.")
         return []
 
-    valid_rms = rms_frames[rms_frames > 0]
-    median_rms = np.median(valid_rms) if valid_rms.size > 0 else 0.01 
-    std_rms = np.std(valid_rms) if valid_rms.size > 0 else 0.01
+    rms_profile = calculate_feature_profile(rms_frames, "RMS")
+    sc_profile = calculate_feature_profile(sc_frames, "Spectral Centroid")
+    flux_profile = calculate_feature_profile(flux_frames, "Spectral Flux", filter_zeros=False)
+
+    combined_events = []
+    for onset_time in features.get('onset_times', []):
+        combined_events.append({'time': onset_time, 'type': 'onset'})
+    for beat_time in features.get('beat_times', []):
+        combined_events.append({'time': beat_time, 'type': 'beat'})
     
-    rms_trigger_threshold_beat = median_rms + (std_rms * RMS_THRESHOLD_FACTOR_BEAT)
-    
-    valid_sc = sc_frames[sc_frames > 0]
-    median_sc = np.median(valid_sc) if valid_sc.size > 0 else 1000 
-    sc_beat_split_thresh = median_sc * SPECTRAL_CENTROID_THRESHOLD_FACTOR
-    
-    onset_rms_trigger_threshold = median_rms + (std_rms * ONSET_RMS_MULTIPLIER) 
-    bass_sc_thresh = median_sc * BASS_CENTROID_LOW_FACTOR
-    
-    valid_flux = flux_frames[flux_frames > 0]
-    median_flux = np.median(valid_flux) if valid_flux.size > 0 else 0.1
-    flux_trigger_threshold = median_flux * SPECTRAL_FLUX_THRESHOLD_FACTOR
-    sharp_onset_rms_thresh = median_rms + (std_rms * ONSET_RMS_SHARP_ACCENT_MULTIPLIER)
+    combined_events.sort(key=lambda x: x['time'])
 
+    time_of_last_generated_cue_overall = -float('inf')
+    sensitivity_boost_active = False
+    current_thresholds = DynamicThresholds(rms_profile, sc_profile, flux_profile, sensitivity_boost=False)
 
-    log_message(f"RMS Beat Trigger: {rms_trigger_threshold_beat:.4f}, Onset RMS Trigger: {onset_rms_trigger_threshold:.4f}, Sharp Onset RMS: {sharp_onset_rms_thresh:.4f}")
-    log_message(f"SC Beat Split: {sc_beat_split_thresh:.2f}, Bass SC: {bass_sc_thresh:.2f}")
-    log_message(f"Flux Trigger: {flux_trigger_threshold:.4f} (Median Flux: {median_flux:.4f})")
+    log_message(f"Processing {len(combined_events)} time-sorted onsets/beats...")
 
-    for onset_time in features['onset_times']:
-        frame_idx = librosa.time_to_frames(onset_time, sr=sr, hop_length=hop_length)
-        if not (0 <= frame_idx < len(rms_frames) and 0 <= frame_idx < len(sc_frames) and 0 <= frame_idx < len(flux_frames)):
-            continue
+    for event_data in combined_events:
+        event_time = event_data['time']
+        event_type = event_data['type']
 
-        current_rms = rms_frames[frame_idx]
-        current_sc = sc_frames[frame_idx]
-        current_flux = flux_frames[frame_idx]
-
-        if current_rms > onset_rms_trigger_threshold and current_sc < bass_sc_thresh:
-            potential_cues.append({
-                "timestamp": round(onset_time, 3), "firework": FIREWORK_TYPES["deep_bass"], "source": "onset_bass"
-            })
-
-        if current_rms > sharp_onset_rms_thresh and current_flux > flux_trigger_threshold:
-            potential_cues.append({
-                "timestamp": round(onset_time, 3), "firework": FIREWORK_TYPES["sharp_accent"], "source": "onset_flux"
-            })
-        elif current_rms > onset_rms_trigger_threshold : 
-            is_already_bass = any(
-                pc["timestamp"] == round(onset_time, 3) and pc["firework"] == FIREWORK_TYPES["deep_bass"]
-                for pc in potential_cues[-2:]
-            )
-            if not is_already_bass:
-                 potential_cues.append({
-                    "timestamp": round(onset_time, 3), "firework": FIREWORK_TYPES["strong_kick"], "source": "onset_kick"
-                })
-    log_message(f"Generated {len(potential_cues)} potential cues from onsets.")
-    
-    onset_cues_count = len(potential_cues)
-
-    for beat_time in features['beat_times']:
-        frame_idx = librosa.time_to_frames(beat_time, sr=sr, hop_length=hop_length)
-        if not (0 <= frame_idx < len(rms_frames) and 0 <= frame_idx < len(sc_frames)):
+        if not sensitivity_boost_active and (event_time - time_of_last_generated_cue_overall > QUIET_DURATION_FOR_BOOST):
+            sensitivity_boost_active = True
+            current_thresholds = DynamicThresholds(rms_profile, sc_profile, flux_profile, sensitivity_boost=True)
+            log_message(f"Sensitivity Boost ACTIVATED at {event_time:.2f}s (Gap: {event_time - time_of_last_generated_cue_overall:.2f}s)")
+        
+        frame_idx = librosa.time_to_frames(event_time, sr=sr, hop_length=hop_length)
+        if not (0 <= frame_idx < len(rms_frames) and \
+                0 <= frame_idx < len(sc_frames) and \
+                (event_type != 'onset' or 0 <= frame_idx < len(flux_frames))):
             continue
         
         current_rms = rms_frames[frame_idx]
         current_sc = sc_frames[frame_idx]
+        cue_generated_this_event = False
 
-        if current_rms > rms_trigger_threshold_beat:
-            firework_type = FIREWORK_TYPES["high_freq"] if current_sc > sc_beat_split_thresh else FIREWORK_TYPES["mid_energy"]
-            potential_cues.append({
-                "timestamp": round(beat_time, 3), "firework": firework_type, "source": "beat"
-            })
-    log_message(f"Generated {len(potential_cues) - onset_cues_count} potential cues from beats.")
+        if event_type == 'onset':
+            current_flux = flux_frames[frame_idx]
+            if current_rms > current_thresholds.onset_rms_trigger_threshold and current_sc < current_thresholds.bass_sc_thresh:
+                potential_cues.append({
+                    "timestamp": round(event_time, 3), "firework": FIREWORK_TYPES["deep_bass"], "source": "onset_bass"
+                })
+                cue_generated_this_event = True
+            if current_rms > current_thresholds.sharp_onset_rms_thresh and current_flux > current_thresholds.flux_trigger_threshold:
+                potential_cues.append({
+                    "timestamp": round(event_time, 3), "firework": FIREWORK_TYPES["sharp_accent"], "source": "onset_flux"
+                })
+                cue_generated_this_event = True
+            elif current_rms > current_thresholds.onset_rms_trigger_threshold:
+                is_already_bass_or_sharp_at_this_onset = any(
+                    pc["timestamp"] == round(event_time, 3) and 
+                    (pc["firework"] == FIREWORK_TYPES["deep_bass"] or pc["firework"] == FIREWORK_TYPES["sharp_accent"])
+                    for pc in potential_cues[-2:]
+                )
+                if not is_already_bass_or_sharp_at_this_onset:
+                    potential_cues.append({
+                        "timestamp": round(event_time, 3), "firework": FIREWORK_TYPES["strong_kick"], "source": "onset_kick"
+                    })
+                    cue_generated_this_event = True
+        
+        elif event_type == 'beat':
+            if current_rms > current_thresholds.rms_trigger_threshold_beat:
+                firework_type = FIREWORK_TYPES["high_freq"] if current_sc > current_thresholds.sc_beat_split_thresh else FIREWORK_TYPES["mid_energy"]
+                potential_cues.append({
+                    "timestamp": round(event_time, 3), "firework": firework_type, "source": "beat"
+                })
+                cue_generated_this_event = True
 
+        if cue_generated_this_event:
+            time_of_last_generated_cue_overall = round(event_time, 3)
+            if sensitivity_boost_active:
+                sensitivity_boost_active = False
+                current_thresholds = DynamicThresholds(rms_profile, sc_profile, flux_profile, sensitivity_boost=False)
+                log_message(f"Sensitivity Boost DEACTIVATED at {event_time:.2f}s due to new cue.")
+
+    log_message(f"Generated {len(potential_cues)} potential cues from combined event stream.")
+    
     potential_cues.sort(key=lambda x: (x["timestamp"], x["firework"]))
-    log_message(f"Total potential cues before filtering: {len(potential_cues)}")
+    
+    deduplicated_cues = []
+    if potential_cues:
+        deduplicated_cues.append(potential_cues[0])
+        for i in range(1, len(potential_cues)):
+            if not (potential_cues[i]["timestamp"] == potential_cues[i-1]["timestamp"] and \
+                    potential_cues[i]["firework"] == potential_cues[i-1]["firework"]):
+                deduplicated_cues.append(potential_cues[i])
+    log_message(f"Potential cues after basic deduplication: {len(deduplicated_cues)}")
 
     final_cues = []
     last_cue_times_by_type = {fw_type: -float('inf') for fw_type in FIREWORK_TYPES.values()}
@@ -246,7 +369,7 @@ def generate_cues(sr, features, hop_length):
     dropped_same_type = 0
     dropped_particle_proximity = 0
 
-    for cue in potential_cues:
+    for cue in deduplicated_cues:
         ts = cue["timestamp"]
         fw_type = cue["firework"]
 
@@ -257,14 +380,8 @@ def generate_cues(sr, features, hop_length):
         is_particle_cue = fw_type in PARTICLE_FIREWORK_TYPES
         if is_particle_cue:
             if ts - last_particle_cue_time < MIN_TIME_BETWEEN_ANY_PARTICLE_CUES:
-                can_override_proximity = False
-                if final_cues and final_cues[-1]["timestamp"] == ts and final_cues[-1]["firework"] in PARTICLE_FIREWORK_TYPES and final_cues[-1]["firework"] != fw_type:
-                    can_override_proximity = True
-                
-                if not can_override_proximity:
-                    dropped_particle_proximity +=1
-                    continue
-            
+                dropped_particle_proximity +=1
+                continue
             last_particle_cue_time = ts
 
         final_cues.append(cue)
@@ -277,7 +394,7 @@ def generate_cues(sr, features, hop_length):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='HanabiSync - Advanced Cues')
+    parser = argparse.ArgumentParser(description='HanabiSync - Auto-Thresholds & Adaptive Sensitivity')
     parser.add_argument('-f', '--file', help='Path to audio file')
     args = parser.parse_args()
 
@@ -291,13 +408,13 @@ def main():
     _y, sr, features_dict = analysis_data
     firework_cues = generate_cues(sr, features_dict, HOP_LENGTH_FEATURES)
 
-    output_filename = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(audio_file_path))[0]}_cues.json")
+    output_filename = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(audio_file_path))[0]}_cues_adaptive.json")
     
     log_message(f"\n--- Generated Cues ({len(firework_cues)}) ---")
-    for cue in firework_cues[:10]:
+    for cue in firework_cues[:15]:
         log_message(f"  {cue['timestamp']:.3f}s - {cue['firework']:<12} (from {cue['source']})")
-    if len(firework_cues) > 10:
-        log_message(f"  ... and {len(firework_cues) - 10} more cues.")
+    if len(firework_cues) > 15:
+        log_message(f"  ... and {len(firework_cues) - 15} more cues.")
 
     try:
         cues_to_save = [{"timestamp": c["timestamp"], "firework": c["firework"]} for c in firework_cues]
@@ -306,8 +423,7 @@ def main():
     except IOError as e:
         log_message(f"Error saving cue map: {e}")
     
-    log_message("🎆🔊 HanabiSync Advanced PoC complete! Tune thresholds and cooldowns for best results. 🔊🎆")
-    log_message("Future idea: Explore librosa.segment.recurrence_matrix for detecting truly repeating song patterns.")
+    log_message("🎆🔊 HanabiSync Adaptive PoC complete! Tune percentiles in DynamicThresholds & QUIET_DURATION_FOR_BOOST. 🔊🎆")
 
 if __name__ == "__main__":
     main()
