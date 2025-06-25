@@ -1,0 +1,112 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info
+
+# Virtual environment
+.venv/
+venv/
+env/
+envs/
+ENV/
+pythonenv/
+virtenv/
+_venv/
+.python-version
+
+# Install logs
+pip-log.txt*
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.egg
+
+# MyPy cache
+.mypy_cache/
+
+# Flake8 cache
+.flake8
+
+# Jupyter Notebook related files
+.ipynb_checkpoints/
+*.ipynb.orig
+
+# PyInstaller / cx_Freeze distributable files
+dist/
+build/
+*.spec
+
+# OS Specific files (macOS)
+.DS_Store
+
+# VS Code files
+.vscode/
+
+# PyCharm related files
+.idea/
+
+# Spyder related files
+.spyderproject
+.spyproject
+
+# Rope related files
+.ropeproject/
+
+# Black and isort cache
+.black_cache/
+.isort_cache/
+
+# Ruff cache
+.ruff_cache/
+
+# Poetry related files
+poetry.lock
+.venv
+
+# Conda environment related files
+environment.yml
+conda-env/
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+*~
+~$*
+
+# Editor/IDE backups
+*.bak
+*.orig
+
+# Documentation build output
+_build/
+
+# Static analysis caches
+.pylintrc.d/
+.pyre_configuration/
+
+# OS generated thumbnails
+Thumbs.db
+ehthumbs.db
+
+# Files that might contain sensitive information
+.env
+*.key
+*.pem
+*.cert
+credentials.json
+serviceAccountKey.json
+auth.json
+config.ini
+secrets.ini
